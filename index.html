@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>우리 가족 통합 대시보드 (Family OS)</title>
+  <link rel="stylesheet" href="style.css" />
+  <!-- Firebase SDKs -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+    import { getFirestore, collection, addDoc, getDocs, updateDoc, doc, deleteDoc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+    // TODO: 아래 본인의 Firebase 설정값으로 교체하세요!
+    const firebaseConfig = {
+      apiKey: "AIzaSyBqfyX2X16tsWpF3We3WDJCvumzTw6-bps",
+  authDomain: "family-dashboard-2525.firebaseapp.com",
+  projectId: "family-dashboard-2525",
+  storageBucket: "family-dashboard-2525.firebasestorage.app",
+  messagingSenderId: "1047529782569",
+  appId: "1:1047529782569:web:0b873ecd7b21253450cb38",
+  measurementId: "G-NRD6DHN52V"
+    };
+
+    // 허용할 부부의 구글 이메일 주소 (화이트리스트 보안)
+    const ALLOWED_EMAILS = ["onetwohook@gmail.com", "c891027@gmail.com"];
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    const provider = new GoogleAuthProvider();
+
+    window.firebaseAuth = { auth, provider, signInWithPopup, signOut, onAuthStateChanged };
+    window.firebaseDb = { db, collection, addDoc, getDocs, updateDoc, doc, deleteDoc, onSnapshot, query, orderBy };
+    window.ALLOWED_EMAILS = ALLOWED_EMAILS;
+  </script>
+</head>
+<body>
+
+  <!-- 로그인 오버레이 (인증되지 않은 경우 표시) -->
+  <div id="auth-overlay" style="display:none; position:fixed; inset:0; background:rgba(44,51,51,0.85); z-index:9999; justify-content:center; align-items:center;">
+    <div style="background:white; padding:32px; border-radius:16px; text-align:center; max-width:380px; width:90%; box-shadow:0 10px 25px rgba(0,0,0,0.2);">
+      <h2 style="color:var(--primary); margin-bottom:10px;">🏡 가족 대시보드 보안 로그인</h2>
+      <p style="font-size:0.9rem; color:var(--text-muted); margin-bottom:20px;">등록된 가족 구성원(구글 계정)만 접근할 수 있습니다.</p>
+      <button onclick="loginWithGoogle()" class="btn" style="width:100%; padding:12px; font-size:1rem; display:flex; align-items:center; justify-content:center; gap:8px;">
+        <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#fff" d="M12 5c1.6 0 3 .6 4.1 1.6l3.1-3.1C17.3 1.8 14.8 1 12 1 7.4 1 3.5 3.6 1.6 7.4l3.7 2.9C6.2 7.3 8.9 5 12 5z"/><path fill="#fff" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.8z"/><path fill="#fff" d="M5.3 14.7c-.2-.7-.4-1.5-.4-2.7s.2-2 .4-2.7L1.6 6.4C.6 8.4 0 10.6 0 13s.6 4.6 1.6 6.6l3.7-2.9z"/><path fill="#fff" d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3.1 0-5.8-2.3-6.7-5.3L1.6 15.6C3.5 19.4 7.4 23 12 23z"/></svg>
+        구글 계정으로 로그인
+      </button>
+      <div id="login-error" style="color:#E56B6F; font-size:0.85rem; margin-top:12px;"></div>
+    </div>
+  </div>
+
+  <!-- 상단 고정 공통 헤더 -->
+  <header>
+    <div class="brand">🏡 우리 가족 대시보드</div>
+    <div class="dday-group">
+      <div class="dday-badge baby" id="dday-baby">👶 아기 +365일</div>
+      <div class="dday-badge wedding" id="dday-wedding">💍 결혼 +1,200일</div>
+      <div class="dday-badge love" id="dday-love">❤️ 연애 +2,100일</div>
+    </div>
+    <div class="weather-clock">
+      <div class="datetime-box">
+        <span id="live-date" class="live-date-text">2026년 11월 12일 (목)</span>
+        <strong id="live-clock">16:00</strong>
+      </div>
+      <button class="weather-btn" id="weather-trigger" onclick="openWeatherModal()" title="클릭하여 시간대별 상세 날씨 및 미세먼지 확인">
+        <span id="header-weather-icon">🌤️</span>
+        <span id="header-weather-text">서울 14°C · 미세먼지 좋음</span>
+        <span class="weather-detail-hint">상세 ▾</span>
+      </button>
+      <button onclick="logout()" class="btn btn-sm" style="background:#6C757D; color:#fff;" title="로그아웃">로그아웃</button>
+    </div>
+  </header>
+
+  <div class="app-container">
+    <!-- 좌측 사이드바 메뉴 (7개) -->
+    <nav class="sidebar" id="desktop-nav">
+      <button class="nav-item active" data-target="view-home">🏠 홈 (대시보드)</button>
+      <button class="nav-item" data-target="view-goals">🎯 목표 관리</button>
+      <button class="nav-item" data-target="view-finance">💰 재정 관리</button>
+      <button class="nav-item" data-target="view-schedule">📅 일정 관리</button>
+      <button class="nav-item" data-target="view-baby">👶 육아 일지</button>
+      <button class="nav-item" data-target="view-health">💪 건강 관리</button>
+      <button class="nav-item" data-target="view-meeting">📝 가족 회의</button>
+    </nav>
+
+    <!-- 메인 콘텐츠 영역 -->
+    <main class="content">
+
+      <!-- 1. 홈 (종합 대시보드) -->
+      <section id="view-home" class="view-section active">
+        <div class="home-grid">
+          <!-- 좌측 컬럼: 목표 & 가계부 요약 -->
+          <div class="column">
+            <div class="card">
+              <div class="card-header">
+                <span class="card-title">🎯 이번 분기 핵심 목표</span>
+                <span class="badge-tag">4분기</span>
+              </div>
+              <div class="goal-item">
+                <div class="goal-info"><span>[공통] 가족 해외여행 자금 모으기</span><strong>80%</strong></div>
+                <div class="progress-bar"><div class="progress-fill" style="width: 80%;"></div></div>
+              </div>
+              <div class="goal-item">
+                <div class="goal-info"><span>[아빠] 주 3회 근력/유산소 운동</span><strong>65%</strong></div>
+                <div class="progress-bar"><div class="progress-fill" style="width: 65%;"></div></div>
+              </div>
+              <div class="goal-item">
+                <div class="goal-info"><span>[엄마] 영어 회화 루틴 & 독서 3권</span><strong>75%</strong></div>
+                <div class="progress-bar"><div class="progress-fill" style="width: 75%;"></div></div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <span class="card-title">💰 11월 가계부 요약</span>
+                <span class="badge-tag">Google Sheets 연동</span>
+              </div>
+              <div class="budget-summary">
+                <div class="budget-label">남은 생활비 예산</div>
+                <div class="budget-amount">1,420,000원</div>
+                <div class="progress-bar" style="height: 10px; margin-top: 8px;">
+                  <div class="progress-fill" style="width: 58%; background: #D4A373;"></div>
+                </div>
+                <div class="budget-sub">
+                  <div>목표 예산<br><strong>3,400,000원</strong></div>
+                  <div>누적 지출<br><strong>1,980,000원</strong></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 중앙 컬럼: 공유 캘린더 -->
+<div class="column">
+  <div class="card" style="height: 100%;">
+    <div class="card-header">
+      <span class="card-title">📅 우리 가족 캘린더</span>
+      <span class="badge-tag">Google Calendar 연동</span>
+    </div>
+    
+    <!-- 구글 캘린더 비공개 임베드 영역 -->
+    <div style="width: 100%; height: 440px; overflow: hidden; border-radius: 12px; background: #FAF9F6; border: 1px solid var(--border);">
+      <iframe src="https://calendar.google.com/calendar/ical/6916b0c3d8fb8286f0e44b0b0f6be5cc6c31b49bfaf0c93fe676f77dc574bd10%40group.calendar.google.com/private-3836057d1b177c43cf7521dcb1c136b5/basic.ics" 
+              style="border: 0" width="100%" height="100%" frameborder="0" scrolling="no">
+      </iframe>
+    </div>
+    <p style="font-size: 0.78rem; color: var(--text-muted); margin-top: 8px; text-align: center;">
+      * 부부 이메일로 권한이유된 비공개 캘린더가 실시간 동기화됩니다.
+    </p>
+  </div>
+</div>
+          <!-- 우측 컬럼: 가사/장보기/한 줄 메모 (실시간 DB 연동) -->
+          <div class="column">
+            <div class="card">
+              <div class="card-header">
+                <span class="card-title">✅ 오늘 루틴 & 장보기</span>
+                <span class="badge-tag">실시간 DB</span>
+              </div>
+              <ul class="check-list" id="todo-list"></ul>
+              <form class="inline-form" onsubmit="addTodo(event)">
+                <input type="text" id="todo-input" placeholder="장보기/할 일 바로 추가..." required />
+                <button type="submit" class="btn">추가</button>
+              </form>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <span class="card-title">💬 가족 한 줄 기록 (어록)</span>
+                <span class="badge-tag">실시간 DB</span>
+              </div>
+              <div id="notes-container"></div>
+              <form class="inline-form" onsubmit="addNote(event)">
+                <input type="text" id="note-input" placeholder="짧은 메모나 아기 어록 남기기..." required />
+                <button type="submit" class="btn">등록</button>
+              </form>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. 목표 관리 -->
+<!-- Goals 탭 내용 영역 -->
+<div id="goals-tab" class="tab-content" style="display: none;">
+  <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+    <div>
+      <span class="card-title">🎯 패밀리 마스터 목표 관리</span>
+      <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">부부 각자의 비전과 우리 아기의 소중한 성장 마일스톤을 기록하는 공간입니다.</p>
+    </div>
+    <!-- 연도 변경 컨트롤러 -->
+    <div style="display: flex; align-items: center; gap: 12px; background: #FAF9F6; padding: 6px 14px; border-radius: 20px; border: 1px solid var(--border);">
+      <button id="prev-year-btn" style="background: none; border: none; cursor: pointer; font-size: 1rem; color: var(--text-main);">◀</button>
+      <span id="current-year-display" style="font-weight: 600; font-size: 0.95rem; color: var(--text-main);">2026</span>
+      <button id="next-year-btn" style="background: none; border: none; cursor: pointer; font-size: 1rem; color: var(--text-main);">▶</button>
+    </div>
+  </div>
+
+  <!-- 아빠 / 엄마 2컬럼 레이아웃 -->
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px;">
+    
+    <!-- [아빠 칸] 그린 계열 톤다운 스타일 -->
+    <div style="background: #F4F7F5; border: 2px solid #688F7D; border-radius: 16px; padding: 20px; box-shadow: 0 4px 12px rgba(104, 143, 125, 0.08);">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 2px solid #D5E1DB; padding-bottom: 10px;">
+        <h3 style="margin: 0; color: #2C4236; font-size: 1.1rem; display: flex; align-items: center; gap: 8px;">
+          👨‍💼 우리 <span style="font-size: 0.75rem; background: #688F7D; color: white; padding: 2px 8px; border-radius: 10px;">Green Vision</span>
+        </h3>
+        <button onclick="openAddGoalModal('dad')" style="background: #4A6B5B; color: white; border: none; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; cursor: pointer;">+ 목표 추가</button>
+      </div>
+
+      <!-- 연간 목표 박스 (눈에 띄는 테두리) -->
+      <div style="background: white; border: 2px dashed #4A6B5B; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+        <div style="font-size: 0.78rem; font-weight: 700; color: #4A6B5B; margin-bottom: 6px; text-transform: uppercase;">✨ 연간 핵심 목표 (Annual Goal)</div>
+        <div class="goal-item" style="display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem;">
+          <span>신사에그의원 3층 확장 및 원스톱 스킨케어 패키지 안정화</span>
+          <div>
+            <button class="btn-edit" style="font-size: 0.75rem; margin-right: 4px; background: none; border: none; cursor: pointer; color: #4A6B5B;">수정</button>
+            <button class="btn-delete" style="font-size: 0.75rem; background: none; border: none; cursor: pointer; color: #d9534f;">삭제</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 분기별 목표 영역 -->
+      <div style="font-size: 0.78rem; font-weight: 700; color: #557062; margin-bottom: 8px; text-transform: uppercase;">📈 분기별 마일스톤 (Quarterly Goals)</div>
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <div style="background: white; padding: 12px; border-radius: 8px; border: 1px solid #D5E1DB; display: flex; justify-content: space-between; align-items: center; font-size: 0.88rem;">
+          <div><strong style="color: #4A6B5B; margin-right: 6px;">Q1</strong> 2910nm Er:Fiber 레이저 임상 데이터 고도화</div>
+          <div><button style="font-size: 0.75rem; background: none; border: none; cursor: pointer; color: #4A6B5B;">수정</button></div>
+        </div>
+        <div style="background: white; padding: 12px; border-radius: 8px; border: 1px solid #D5E1DB; display: flex; justify-content: space-between; align-items: center; font-size: 0.88rem;">
+          <div><strong style="color: #4A6B5B; margin-right: 6px;">Q2</strong> AI 멀티에이전트 클리닉 운영 자동화 도입</div>
+          <div><button style="font-size: 0.75rem; background: none; border: none; cursor: pointer; color: #4A6B5B;">수정</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- [엄마 칸] 노랑/주황 계열 톤다운 스타일 -->
+    <div style="background: #FAF7F2; border: 2px solid #E59A7D; border-radius: 16px; padding: 20px; box-shadow: 0 4px 12px rgba(229, 154, 125, 0.08);">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 2px solid #F3DEC8; padding-bottom: 10px;">
+        <h3 style="margin: 0; color: #5A3D31; font-size: 1.1rem; display: flex; align-items: center; gap: 8px;">
+          👩‍⚖️ 은정 <span style="font-size: 0.75rem; background: #D97757; color: white; padding: 2px 8px; border-radius: 10px;">Warm Vision</span>
+        </h3>
+        <button onclick="openAddGoalModal('mom')" style="background: #D97757; color: white; border: none; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; cursor: pointer;">+ 목표 추가</button>
+      </div>
+
+      <!-- 연간 목표 박스 (눈에 띄는 테두리) -->
+      <div style="background: white; border: 2px dashed #D97757; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+        <div style="font-size: 0.78rem; font-weight: 700; color: #D97757; margin-bottom: 6px; text-transform: uppercase;">✨ 연간 핵심 목표 (Annual Goal)</div>
+        <div class="goal-item" style="display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem;">
+          <span>가족과 함께하는 소중한 시간 확보 및 자기돌봄 루틴 정착</span>
+          <div>
+            <button class="btn-edit" style="font-size: 0.75rem; margin-right: 4px; background: none; border: none; cursor: pointer; color: #D97757;">수정</button>
+            <button class="btn-delete" style="font-size: 0.75rem; background: none; border: none; cursor: pointer; color: #d9534f;">삭제</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 분기별 목표 영역 -->
+      <div style="font-size: 0.78rem; font-weight: 700; color: #9A6550; margin-bottom: 8px; text-transform: uppercase;">📈 분기별 마일스톤 (Quarterly Goals)</div>
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <div style="background: white; padding: 12px; border-radius: 8px; border: 1px solid #F3DEC8; display: flex; justify-content: space-between; align-items: center; font-size: 0.88rem;">
+          <div><strong style="color: #D97757; margin-right: 6px;">Q1</strong> 육아 휴직 기간 효율적 시간 관리 및 힐링 계획</div>
+          <div><button style="font-size: 0.75rem; background: none; border: none; cursor: pointer; color: #D97757;">수정</button></div>
+        </div>
+        <div style="background: white; padding: 12px; border-radius: 8px; border: 1px solid #F3DEC8; display: flex; justify-content: space-between; align-items: center; font-size: 0.88rem;">
+          <div><strong style="color: #D97757; margin-right: 6px;">Q2</strong> 하반기 복귀 준비 및 마인드셋 세팅</div>
+          <div><button style="font-size: 0.75rem; background: none; border: none; cursor: pointer; color: #D97757;">수정</button></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- [아기 전용 마일스톤 서브 카드 섹션] 블루 & 핑크 파스텔 톤 -->
+  <div style="background: linear-gradient(135deg, #F0F4F8 0%, #FDF2F4 100%); border: 2px solid #B8C5D6; border-radius: 16px; padding: 20px; box-shadow: 0 4px 12px rgba(138, 154, 172, 0.08);">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 2px solid #E2E8F0; padding-bottom: 10px;">
+      <h3 style="margin: 0; color: #3B4A5A; font-size: 1.1rem; display: flex; align-items: center; gap: 8px;">
+        👶 우리 아기 성장 마일스톤 <span style="font-size: 0.75rem; background: #5B82A6; color: white; padding: 2px 8px; border-radius: 10px;">Baby Milestone</span>
+      </h3>
+      <span style="font-size: 0.8rem; color: #64748B;">D-Day 및 달성일을 기록해 보세요</span>
+    </div>
+
+    <!-- 마일스톤 카드 그리드 (뒤집기, 이유식, 배밀이, 앉기, 네발기기, 서기, 걷기 등) -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px;">
+      
+      <!-- 달성된 예시 카드 (활성화 상태) -->
+      <div style="background: white; border: 2px solid #5B82A6; border-radius: 12px; padding: 12px; text-align: center; box-shadow: 0 2px 6px rgba(91, 130, 166, 0.15);">
+        <div style="font-size: 1.5rem; margin-bottom: 4px;">🙃</div>
+        <div style="font-weight: 600; font-size: 0.9rem; color: #2D3748;">뒤집기 성공</div>
+        <div style="font-size: 0.75rem; background: #EBF4FF; color: #2B6CB0; padding: 2px 6px; border-radius: 6px; margin-top: 6px; display: inline-block;">생후 135일 (D+135)</div>
+      </div>
+
+      <!-- 달성된 예시 카드 (활성화 상태) -->
+      <div style="background: white; border: 2px solid #D4839B; border-radius: 12px; padding: 12px; text-align: center; box-shadow: 0 2px 6px rgba(212, 131, 155, 0.15);">
+        <div style="font-size: 1.5rem; margin-bottom: 4px;">🥣</div>
+        <div style="font-weight: 600; font-size: 0.9rem; color: #2D3748;">이유식 시작</div>
+        <div style="font-size: 0.75rem; background: #FFF1F2; color: #9B2C2C; padding: 2px 6px; border-radius: 6px; margin-top: 6px; display: inline-block;">생후 180일 (D+180)</div>
+      </div>
+
+      <!-- 미달성 카드 (흐린 비활성 상태) -->
+      <div style="background: rgba(255,255,255,0.6); border: 2px dashed #CBD5E1; border-radius: 12px; padding: 12px; text-align: center; opacity: 0.7;">
+        <div style="font-size: 1.5rem; margin-bottom: 4px; filter: grayscale(100%);">🦀</div>
+        <div style="font-weight: 600; font-size: 0.9rem; color: #64748B;">배밀이</div>
+        <div style="font-size: 0.75rem; color: #94A3B8; margin-top: 6px;">미달성 (터치하여 기록)</div>
+      </div>
+
+      <!-- 미달성 카드 -->
+      <div style="background: rgba(255,255,255,0.6); border: 2px dashed #CBD5E1; border-radius: 12px; padding: 12px; text-align: center; opacity: 0.7;">
+        <div style="font-size: 1.5rem; margin-bottom: 4px; filter: grayscale(100%);">🧘</div>
+        <div style="font-weight: 600; font-size: 0.9rem; color: #64748B;">혼자 앉기</div>
+        <div style="font-size: 0.75rem; color: #94A3B8; margin-top: 6px;">미달성 (터치하여 기록)</div>
+      </div>
+
+      <!-- 미달성 카드 -->
+      <div style="background: rgba(255,255,255,0.6); border: 2px dashed #CBD5E1; border-radius: 12px; padding: 12px; text-align: center; opacity: 0.7;">
+        <div style="font-size: 1.5rem; margin-bottom: 4px; filter: grayscale(100%);">🐾</div>
+        <div style="font-weight: 600; font-size: 0.9rem; color: #64748B;">네발기기</div>
+        <div style="font-size: 0.75rem; color: #94A3B8; margin-top: 6px;">미달성 (터치하여 기록)</div>
+      </div>
+
+      <!-- 미달성 카드 -->
+      <div style="background: rgba(255,255,255,0.6); border: 2px dashed #CBD5E1; border-radius: 12px; padding: 12px; text-align: center; opacity: 0.7;">
+        <div style="font-size: 1.5rem; margin-bottom: 4px; filter: grayscale(100%);">🧍</div>
+        <div style="font-weight: 600; font-size: 0.9rem; color: #64748B;">잡고 서기</div>
+        <div style="font-size: 0.75rem; color: #94A3B8; margin-top: 6px;">미달성 (터치하여 기록)</div>
+      </div>
+
+      <!-- 미달성 카드 -->
+      <div style="background: rgba(255,255,255,0.6); border: 2px dashed #CBD5E1; border-radius: 12px; padding: 12px; text-align: center; opacity: 0.7;">
+        <div style="font-size: 1.5rem; margin-bottom: 4px; filter: grayscale(100%);">👣</div>
+        <div style="font-weight: 600; font-size: 0.9rem; color: #64748B;">첫 걸음마</div>
+        <div style="font-size: 0.75rem; color: #94A3B8; margin-top: 6px;">미달성 (터치하여 기록)</div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+      <!-- 3. 재정 관리 -->
+      <section id="view-finance" class="view-section">
+        <div class="sub-grid-2">
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">💰 주체별 가계부 현황 (11월)</span>
+              <span class="badge-tag">Google Sheets 동기화</span>
+            </div>
+            <table>
+              <thead>
+                <tr><th>일자</th><th>주체</th><th>구분</th><th>내역</th><th>금액</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>11/12</td><td>공통</td><td>변동지출</td><td>유아식 식재료 & 과일</td><td>68,000원</td></tr>
+                <tr><td>11/10</td><td>공통</td><td>정기지출</td><td>아파트 관리비 & 공과금</td><td>245,000원</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">📈 재무 목표 & 정기지출 관리</span>
+            </div>
+            <div class="goal-item">
+              <div class="goal-info"><span>ISA 계좌 배당 ETF 적립 목표</span><strong>92%</strong></div>
+              <div class="progress-bar"><div class="progress-fill" style="width: 92%;"></div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. 일정 관리 -->
+      <section id="view-schedule" class="view-section">
+        <div class="sub-grid-2">
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">🎉 매년 반복 가족 기념일</span>
+            </div>
+            <table>
+              <thead>
+                <tr><th>기념일명</th><th>날짜</th><th>다가오는 D-day</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>👶 아기 두 번째 생일</td><td>매년 11월 12일</td><td><strong>D-Day!</strong></td></tr>
+                <tr><td>💍 부부 결혼기념일</td><td>매년 5월 20일</td><td>D-189</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">📅 구글 캘린더 일정 연동</span>
+            </div>
+            <p class="muted-desc">스마트폰 구글 캘린더 앱과 양방향으로 연동됩니다.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 5. 육아 일지 -->
+      <section id="view-baby" class="view-section">
+        <div class="sub-grid-2">
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">🍼 오늘의 수유 / 식단 / 수면 기록</span>
+            </div>
+            <ul class="check-list">
+              <li><span>07:30 기상 및 아침 우유 200ml</span><span class="badge-tag">수유</span></li>
+              <li><span>08:30 아기 식단: 소고기 야채죽</span><span class="badge-tag">식단</span></li>
+            </ul>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">📏 성장 지표 & 예방접종 트래커</span>
+            </div>
+            <p style="font-size: 0.9rem; margin-bottom: 12px;">최근 측정: <strong>키 76.5cm / 몸무게 10.2kg</strong></p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 6. 건강 관리 -->
+      <section id="view-health" class="view-section">
+        <div class="sub-grid-2">
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">⚖️ 구성원 신체 기록</span>
+            </div>
+            <table>
+              <thead>
+                <tr><th>구성원</th><th>키</th><th>체중</th><th>목표 체중</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>아빠</td><td>178 cm</td><td>74.5 kg</td><td>72.0 kg</td></tr>
+                <tr><td>엄마</td><td>164 cm</td><td>53.0 kg</td><td>52.0 kg</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">🏃 주간 운동 스케줄</span>
+            </div>
+            <ul class="check-list">
+              <li><span>[월/수/일 - 아빠] 유산소 30분 + 웨이트</span></li>
+              <li><span>[화/목 - 엄마] 홈트레이닝 필라테스</span></li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- 7. 가족 회의 -->
+      <section id="view-meeting" class="view-section">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">📝 정기 가족 회의록 아카이브</span>
+            <button class="btn">+ 회의록 작성</button>
+          </div>
+          <div class="note-item" style="background: #FAF9F6; border-left-color: var(--primary);">
+            <strong>[2026년 11월 1차 가족 회의] 연말 예산 점검</strong>
+            <p style="margin-top: 6px; font-size: 0.85rem;">연말 선물 및 모임 예산 50만 원 편성</p>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- 모바일 하단 고정 내비게이션 -->
+  <nav class="mobile-bottom-nav">
+    <button class="mob-nav-btn active" onclick="switchTab('view-home', this)">🏠<span>홈</span></button>
+    <button class="mob-nav-btn" onclick="switchTab('view-finance', this)">💰<span>재정</span></button>
+    <button class="mob-nav-btn" onclick="switchTab('view-baby', this)">👶<span>육아</span></button>
+    <button class="mob-nav-btn" onclick="switchTab('view-schedule', this)">📅<span>일정</span></button>
+    <button class="mob-nav-btn" onclick="openMenuModal()">☰<span>전체메뉴</span></button>
+  </nav>
+
+  <!-- 모바일 빠른 입력 플로팅 버튼 -->
+  <button class="fab-btn" onclick="openQuickModal()" title="빠른 기록">+</button>
+
+  <!-- 모달 1: 상세 날씨 (날짜 표기 추가됨) -->
+  <div class="modal-backdrop" id="weather-modal" onclick="closeModals(event)">
+    <div class="modal-box weather-modal-box" onclick="event.stopPropagation()">
+      <div class="card-header">
+        <div>
+          <h3 style="font-size: 1.1rem;">🌤️ 우리 동네 상세 날씨</h3>
+          <span id="modal-weather-date" style="font-size: 0.82rem; color: var(--primary); font-weight: 600;">2026년 11월 12일 (목) 기준</span>
+        </div>
+        <select id="region-select" onchange="changeWeatherRegion(this.value)" style="padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); font-size: 0.85rem;">
+          <option value="seoul_gangnam">서울 강남구 (신사동)</option>
+          <option value="seoul_gwangjin">서울 광진구 (자양동)</option>
+          <option value="seoul_seongdong">서울 성동구 (옥수동)</option>
+        </select>
+      </div>
+
+      <div class="weather-hero">
+        <div class="weather-hero-main">
+          <span class="weather-big-icon" id="modal-w-icon">🌤️</span>
+          <div>
+            <div class="weather-big-temp" id="modal-w-temp">--°C</div>
+            <div class="weather-desc" id="modal-w-desc">데이터 불러오는 중...</div>
+          </div>
+        </div>
+        <div class="baby-outfit-tip" id="modal-w-tip">
+          👶 <strong>아기 외출 팁:</strong> 기온 변화에 맞춰 겉옷을 챙겨주세요.
+        </div>
+      </div>
+
+      <div class="air-quality-grid">
+        <div class="air-card">
+          <div class="air-label">미세먼지 (PM10)</div>
+          <div class="air-val good" id="modal-pm10">측정중</div>
+        </div>
+        <div class="air-card">
+          <div class="air-label">초미세먼지 (PM2.5)</div>
+          <div class="air-val good" id="modal-pm25">측정중</div>
+        </div>
+        <div class="air-card">
+          <div class="air-label">강수량 / 습도</div>
+          <div class="air-val" id="modal-rain-humid">-- · --</div>
+        </div>
+      </div>
+
+      <h4 style="font-size: 0.9rem; margin: 16px 0 8px;">🕒 시간대별 기온 및 강수확률</h4>
+      <div class="hourly-scroll" id="hourly-forecast-list"></div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px;">
+        <a href="https://open-meteo.com/" target="_blank" rel="noopener" style="font-size: 0.8rem; color: var(--primary); text-decoration: none; font-weight: 600;">
+          Open-Meteo Weather API ↗
+        </a>
+        <button class="btn" onclick="closeModals()">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 모달 2: 모바일 전체 메뉴 -->
+  <div class="modal-backdrop" id="menu-modal" onclick="closeModals(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <h3 style="margin-bottom: 14px;">전체 메뉴 이동</h3>
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <button class="btn" style="background:var(--bg-sidebar); color:var(--text-dark);" onclick="switchTabFromModal('view-goals')">🎯 목표 관리</button>
+        <button class="btn" style="background:var(--bg-sidebar); color:var(--text-dark);" onclick="switchTabFromModal('view-health')">💪 건강 관리</button>
+        <button class="btn" style="background:var(--bg-sidebar); color:var(--text-dark);" onclick="switchTabFromModal('view-meeting')">📝 가족 회의</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 모달 3: 모바일 빠른 입력 -->
+  <div class="modal-backdrop" id="quick-modal" onclick="closeModals(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <h3 style="margin-bottom: 12px;">⚡ 모바일 빠른 기록</h3>
+      <form onsubmit="quickSave(event)" class="stack-form">
+        <select id="quick-type">
+          <option value="todo">🛒 장보기 / 할 일 추가</option>
+          <option value="note">💬 가족 한 줄 메모 / 어록</option>
+        </select>
+        <input type="text" id="quick-text" placeholder="내용을 입력하세요..." required />
+        <button type="submit" class="btn">저장하기</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
